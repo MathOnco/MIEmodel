@@ -101,7 +101,7 @@ departureFromHomeo <-
     ((gRLN[, x] / bRLN[, x]))),
     check.names = FALSE,
     fix.empty.names = FALSE)
-departureFromHomeo[departureFromHomeo < 0] <- 0
+departureFromHomeo[departureFromHomeo > 1] <- 1
 departureFromHomeo <- tidyr::gather(departureFromHomeo, key = "type", value = 'one_minus_d_over_b')
 
 inp <-
