@@ -12,16 +12,20 @@ knitr::opts_knit$set(root.dir = "path/to/dir")
 ```
 
 Load libraries and define constants:
+1) Libraries
+2) N_SAMPLES: number of observations used in rlnorm() function below
+3) MAXCHROMO: select crit curve based on maximum number of chromosomes in ploidy compartment
+4) ALPHA and SHADECOLOR used for background segmentation in final output (2D Boxplot)
 ```{r}
 library(ggplot2) 
 library(gridExtra) 
 library(matlab)
 library(magrittr)
+library(tidyverse)
 N_SAMPLES=1000
-WHICH_CURVE="constant"
+MAXCHROMO=32
 ALPHA=0.35
 SHADECOLOR="gray"
-MAXCHROMO=32
 ```
 
 Read predicted critical curves and plot one example:
@@ -52,11 +56,8 @@ plot(
   log = "x",
   pch = 20
 )
-if (WHICH_CURVE == "constant") {
-  critcurves = old_critcurves
-} else{
-  critcurves = new_critcurves
-}
+
+critList=list("consant"=old_critcurves, "varying"=new_critcurves)
 ```
 
 Read/format data needed to produce 2D box plots of Chromosomal Mis-segregation
@@ -70,86 +71,39 @@ Read/format data needed to produce 2D box plots of Chromosomal Mis-segregation
 8) Set x and y-labels for box plots
 ```{r}
 
-birth_and_growth_Rates <-
+birth_and_growth_Rates <-read.csv(
+    "input/Log_means_and_sd_norms.csv",
+    header = T,
+    check.names = F,
+    stringsAsFactors = F,
+    strip.white = T
+)
+
+gRLN <-
   data.frame(
-    "blm" =
-      c(
-        -2.51405,
-        -1.79009,
-        -1.84878,
-        -1.21294,
-        -2.49839,
-        -1.39956,
-        -2.07355,
-        -2.59514,
-        -3.31508
-      ),
-    "bsd" =
-      c(
-        1.31437,
-        0.655826,
-        0.91377,
-        0.194515,
-        0.888437,
-        0.162913,
-        0.447807,
-        0.991364,
-        1.04925
-      ),
-    "glm" =
-      c(
-        -5.3441,
-        -1.98498,
-        -7.00215,
-        -5.46545,
-        -6.30794,
-        -6.78071,
-        -5.04616,
-        -4.85863,
-        -5.4622
-      ),
-    "gsd" =
-      c(
-        0.874367,
-        0.477869,
-        1.54467,
-        0.578148,
-        0.998794,
-        1.06405,
-        0.410637,
-        0.246221,
-        1.83844
-      ),
-    "type" =
-      c(
-        "Head and Neck",
-        "Esophageal",
-        "Colorectal",
-        "Rectal",
-        "Breast",
-        "Cervix",
-        "Skin (Melanoma)",
-        "Lung (Small-Cell)",
-        "Diffuse Large B-Cell"
-      )
+    sapply(birth_and_growth_Rates$type, function(x)
+      rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates[birth_and_growth_Rates$type ==
+                                                           x, ]$glm, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$gsd)),
+    check.names = FALSE,
+    fix.empty.names = FALSE
   )
 
-gRLN <- list()
-bRLN <- list()
-for (i in 1:nrow(birth_and_growth_Rates)) {
-  gRLN[[birth_and_growth_Rates$type[i]]] <-
-    rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates$glm[i], sdlog =  birth_and_growth_Rates$gsd[i])
-  bRLN[[birth_and_growth_Rates$type[i]]] <-
-    rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates$blm[i], sdlog =  birth_and_growth_Rates$bsd[i])
-}
+bRLN <-
+  data.frame(
+    sapply(birth_and_growth_Rates$type, function(x)
+      rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates[birth_and_growth_Rates$type ==
+                                                           x, ]$blm, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$bsd)),
+    check.names = FALSE,
+    fix.empty.names = FALSE
+  )
 
-dOVERb <- data.frame()
-for (name in unique(birth_and_growth_Rates$type)) {
-  x <- data.frame("db" = 1 - (gRLN[[name]] / bRLN[[name]]))
-  x[x$db < 0,] <- 0
-  x$type = repmat(name, N_SAMPLES, 1)
-  dOVERb <- rbind(dOVERb, x)
-}
+dOVERb <-
+  data.frame(sapply(colnames(bRLN), function(x)
+    (1 - (gRLN[, x] / bRLN[, x]))),
+    check.names = FALSE,
+    fix.empty.names = FALSE)
+dOVERb[dOVERb < 0] <- 0
+dOVERb <- tidyr::gather(dOVERb, key = "type", value = 'db')
 
 inp <-
   read.table("input/Predicted_LaggingChrPct_TCGA.txt", header = T)
@@ -159,12 +113,10 @@ inp$Lagging.Chromosome <- inp$Lagging.Chromosome / 100
 
 subMap = data.frame("inp" = sort(unique(inp$group)),
                     "type" = sort(unique(birth_and_growth_Rates$type)))
-for (name in subMap$inp) {
-  inp[inp$group == name, "group"] <-
-    subMap[subMap$inp == name, "type"]
-}
 
-dOVERb$one_minus_d_over_b <- (1 - dOVERb$db)
+inp$group<-sapply(inp$group, function(x) inp[x, "group"]<-subMap[subMap$inp == x, "type"])
+
+dOVERb$'one_minus_d_over_b'<-1-dOVERb$db
 
 ## choose whether you want to plot 1-d/b(T) or d/b(F)
 adjVal<-T
@@ -205,98 +157,100 @@ df$category <- sort(unique(dOVERb$type))
 
 Load both box plots into same plot:
 ```{r}
-pdf(paste0("figs/05_",WHICH_CURVE,"-beta.pdf"), width = 7,height = 5)
-ggplot(df, aes(fill = category, color = category)) +
-  geom_line(
-    data = critcurves,
-    aes(x = departFromHomeostasis, y = pop_avg_misseg_rate),
-    size = 1,
-    color = "black",
-    linetype = "dotted"
-  )  +
-  
-  ## 2D box defined by the Q1 & Q3 values in each dimension, with outline
-  geom_rect(aes(
-    xmin = x.lower,
-    xmax = x.upper,
-    ymin = y.lower,
-    ymax = y.upper
-  ),
-  alpha = 0.3) +
-  geom_rect(
-    aes(
-      xmin = x.lower,
-      xmax = x.upper,
-      ymin = y.lower,
-      ymax = y.upper
+plotList<-
+    lapply(critList, function(q) ggplot(df, aes(fill = category, color = category)) +
+    geom_line(
+        data = q,
+        aes(x = departFromHomeostasis, y = pop_avg_misseg_rate),
+        size = 1,
+        color = "black",
+        linetype = "dotted"
+    )  +
+    
+    ## 2D box defined by the Q1 & Q3 values in each dimension, with outline
+    geom_rect(aes(
+        xmin = x.lower,
+        xmax = x.upper,
+        ymin = y.lower,
+        ymax = y.upper
     ),
-    color = "black",
-    fill = NA
-  ) +
-  
-  ## whiskers for x-axis dimension with ends
-  geom_segment(aes(
-    x = x.min,
-    y = y.middle,
-    xend = x.max,
-    yend = y.middle
-  )) + ## whiskers
-  geom_segment(aes(
-    x = x.min,
-    y = y.lower,
-    xend = x.min,
-    yend = y.upper
-  )) + ## lower end
-  geom_segment(aes(
-    x = x.max,
-    y = y.lower,
-    xend = x.max,
-    yend = y.upper
-  )) + ## upper end
-  
-  ## whiskers for y-axis dimension with ends
-  geom_segment(aes(
-    x = x.middle,
-    y = y.min,
-    xend = x.middle,
-    yend = y.max
-  )) + ## whiskers
-  geom_segment(aes(
-    x = x.lower,
-    y = y.min,
-    xend = x.upper,
-    yend = y.min
-  )) + ## lower end
-  geom_segment(aes(
-    x = x.lower,
-    y = y.max,
-    xend = x.upper,
-    yend = y.max
-  )) + ## upper end
-  
-  ylab(ylab) + xlab(xlab)+
-  scale_x_continuous(trans = "log", breaks=c(0, 0.002, 0.05, 1))  +
-  theme_classic() +
-  theme(
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    panel.background = element_rect(colour = "black", size = 4)
-  ) +
-  
-  ## shaded areas
-  geom_ribbon(data=critcurves,
-              aes(x=departFromHomeostasis,y = pop_avg_misseg_rate,
-                  ymin=pop_avg_misseg_rate,ymax=1),
-              color = "gray",fill=SHADECOLOR,
-              position="identity",alpha=ALPHA,linetype=2,) +
-  
-  ## shaded areas
-  geom_ribbon(data=critcurves,
-              aes(x=departFromHomeostasis,y = pop_avg_misseg_rate,
-                  ymin=max(pop_avg_misseg_rate),ymax=1),
-              color = "black",fill="black",
-              position="identity",alpha=0.2,linetype=2)      
-
+    alpha = 0.3) +
+    geom_rect(
+        aes(
+            xmin = x.lower,
+            xmax = x.upper,
+            ymin = y.lower,
+            ymax = y.upper
+        ),
+        color = "black",
+        fill = NA
+    ) +
+    
+    ## whiskers for x-axis dimension with ends
+    geom_segment(aes(
+        x = x.min,
+        y = y.middle,
+        xend = x.max,
+        yend = y.middle
+    )) + ## whiskers
+    geom_segment(aes(
+        x = x.min,
+        y = y.lower,
+        xend = x.min,
+        yend = y.upper
+    )) + ## lower end
+    geom_segment(aes(
+        x = x.max,
+        y = y.lower,
+        xend = x.max,
+        yend = y.upper
+    )) + ## upper end
+    
+    ## whiskers for y-axis dimension with ends
+    geom_segment(aes(
+        x = x.middle,
+        y = y.min,
+        xend = x.middle,
+        yend = y.max
+    )) + ## whiskers
+    geom_segment(aes(
+        x = x.lower,
+        y = y.min,
+        xend = x.upper,
+        yend = y.min
+    )) + ## lower end
+    geom_segment(aes(
+        x = x.lower,
+        y = y.max,
+        xend = x.upper,
+        yend = y.max
+    )) + ## upper end
+    
+    ylab(ylab) + xlab(xlab)+
+    scale_x_continuous(trans = "log", breaks=c(0, 0.002, 0.05, 1))  +
+    theme_classic() +
+    theme(
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size = 4)
+    ) +
+    
+    ## shaded areas
+    geom_ribbon(data=q,
+                aes(x=departFromHomeostasis,y = pop_avg_misseg_rate,
+                    ymin=pop_avg_misseg_rate,ymax=1),
+                color = "gray",fill=SHADECOLOR,
+                position="identity",alpha=ALPHA,linetype=2,) +
+    
+    ## shaded areas
+    geom_ribbon(data=q,
+                aes(x=departFromHomeostasis,y = pop_avg_misseg_rate,
+                    ymin=max(pop_avg_misseg_rate),ymax=1),
+                color = "black",fill="black",
+                position="identity",alpha=0.2,linetype=2)      
+)
+pdf(paste0("figs/Figure_5.pdf"), width = 8.5,height = 11)
+egg::ggarrange(plotList$consant, plotList$varying, labels = c("A", "B"))
 plot(0, type = 'n', axes = FALSE, ann = FALSE)
 legend("center",c("Not a steady state","Steady state leads to extinction","Steady state leads to exponential growth"),fill=c("black","gray","white"),cex=1.5)
 dev.off()
