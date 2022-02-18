@@ -82,7 +82,7 @@ gRLN <-
   data.frame(
     sapply(birth_and_growth_Rates$type, function(x)
       rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates[birth_and_growth_Rates$type ==
-                                                           x, ]$glm, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$gsd)),
+                                                           x, ]$GrowthRateMean_lognormDist, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$GrowthRateSD_lognormDist)),
     check.names = FALSE,
     fix.empty.names = FALSE
   )
@@ -91,7 +91,7 @@ bRLN <-
   data.frame(
     sapply(birth_and_growth_Rates$type, function(x)
       rlnorm(N_SAMPLES, meanlog = birth_and_growth_Rates[birth_and_growth_Rates$type ==
-                                                           x, ]$blm, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$bsd)),
+                                                           x, ]$BirthRateMean_lognormDist, sdlog = birth_and_growth_Rates[birth_and_growth_Rates$type == x, ]$BirthRateSD_lognormDist)),
     check.names = FALSE,
     fix.empty.names = FALSE
   )
