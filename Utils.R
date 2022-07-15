@@ -361,3 +361,101 @@ D2 <- function(delta,i,label=FALSE,k=8){
   }
   return(log(i*delta)^2/k^2 )
 } 
+
+
+boxplot2D <- function(df, critcurve, pdfout){
+  # ---
+  # author: "Thomas Veith"
+  # date: "01/02/2021"
+  # ---
+    
+  xlab = expression(paste("Turnover rate (",mu,"/",lambda, ")"))
+  ylab = expression(paste("Mis-segregation Rate (", beta, ")"))
+  col=c("cyan","orange","purple")
+  names(col)=c("Breast","Lung","Skin")
+  
+  # pdf(pdfout, width = 5,height = 3.3)
+  p <- ggplot(df, aes(fill = group, color = group)) +
+    geom_line(
+      data = critcurve,
+      aes(x = mu, y = beta),
+      size = 1,
+      color = "black",
+      linetype = "solid"
+    )  +
+    
+    ## 2D box defined by the Q1 & Q3 values in each dimension, with outline
+    geom_rect(aes(
+      xmin = x.lower,
+      xmax = x.upper,
+      ymin = y.lower,
+      ymax = y.upper
+    ),
+    alpha = 0.3) +
+    geom_rect(
+      aes(
+        xmin = x.lower,
+        xmax = x.upper,
+        ymin = y.lower,
+        ymax = y.upper
+      ),
+      color = "black",
+      fill = NA
+    ) +
+    
+    ## whiskers for x-axis dimension with ends
+    geom_segment(aes(
+      x = x.min,
+      y = y.middle,
+      xend = x.max,
+      yend = y.middle
+    )) + ## whiskers
+    geom_segment(aes(
+      x = x.min,
+      y = y.lower,
+      xend = x.min,
+      yend = y.upper
+    )) + ## lower end
+    geom_segment(aes(
+      x = x.max,
+      y = y.lower,
+      xend = x.max,
+      yend = y.upper
+    )) + ## upper end
+    
+    ## whiskers for y-axis dimension with ends
+    geom_segment(aes(
+      x = x.middle,
+      y = y.min,
+      xend = x.middle,
+      yend = y.max
+    )) + ## whiskers
+    geom_segment(aes(
+      x = x.lower,
+      y = y.min,
+      xend = x.upper,
+      yend = y.min
+    )) + ## lower end
+    geom_segment(aes(
+      x = x.lower,
+      y = y.max,
+      xend = x.upper,
+      yend = y.max
+    )) + ## upper end
+    
+    ylab(ylab) + xlab(xlab)+
+    scale_y_continuous(trans = "log", breaks=c(0, 0.002, 0.05, 1))  +
+    theme_classic() +
+    scale_fill_manual(values=c(col[df$group],"black")) +
+    scale_color_manual(values=c(col[df$group],"black")) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(colour = "black", size = 4)
+    ) 
+  
+  ggsave(pdfout,width = 5,height = 3.3)
+}
+
+
+
