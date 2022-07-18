@@ -1,0 +1,246 @@
+---
+title: "MIE heterogeneous mis-segr. rate"
+author: "Richard J Beck"
+date: "6/8/2022"
+output: html_document
+---
+
+This file produces the figure related to predicting MIE when mis-segregation rates are heterogeneous - including showing the functional forms, plotting the critical curves, and evaluating the dynamics of the model
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+```
+
+Source required functions and load libraries:
+```{r,message=FALSE}
+library(parallel)
+library(deSolve)
+library(pbapply)
+library(R.utils)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(deSolve)
+library(egg)
+source("Rscripts/functions.R")
+```
+
+Generate data for 'linear' function
+```{r}
+## function to determine steady state mis-segregation rate
+pop_ss_B <- function(beta,mu,maxchrom,B){
+  A <- get_A(maxchrom=maxchrom,beta=beta,mu=mu,B=B)
+  ss <- eigen(t(A))
+  ss <- abs(ss$vectors[,apply(ss$vectors,2,function(i) prod(i>0)==1)])
+  ss <- ss/sum(ss)
+  p_mis <- sapply(1:length(ss), function(i) B(beta,i))
+  sum(ss*p_mis)
+}
+
+## mis-segregation rate function
+Blin <- function(beta,i){
+  min(1,exp(beta-1.352857*i)/100)
+  
+}
+## finds the lowest value of mis-segregation rate in the domain 
+Bmin <- function(beta,B,minchrom,maxchrom){
+  min(sapply(minchrom:maxchrom, function(i) B(beta,i)))
+}
+
+##produces data for the plot showing the behaviour of the function beta()
+maxchrom <- 5
+df_demo <- do.call(rbind,lapply(-2:4, function(beta){
+  data.frame(theta=beta,ploidy=1:maxchrom,B=sapply(1:maxchrom, function(i) Blin(beta,i)))}))
+
+## values of B to parameterise the function 
+beta_vals <- -2.657704*seq(1,-2.25,-0.1625)
+
+## find the critical curve
+df_lin <- do.call(rbind,pblapply(beta_vals,find_c_crit,maxchrom=maxchrom,B=Blin))
+
+## compute population avg mis-seg. rate
+df_lin$pop_B <- sapply(1:nrow(df_lin), function(i){
+  pop_ss_B(df_lin$beta[i],df_lin$mu[i],maxchrom=maxchrom,B=Blin)
+})
+
+## compute population minimum mis-seg. rate
+df_lin$minB <- sapply(df_lin$beta, Bmin, B=Blin,minchrom=1,maxchrom=maxchrom)
+
+## select parameters to run the ODE model
+pars <- df_lin[nrow(df_lin)-2,]
+beta <- pars$beta
+mu <- pars$mu
+
+ode_pars <- data.frame(beta=beta,mu=mu)
+
+#run ode model
+x <- run_ode(beta = beta,mu = mu,maxchrom=maxchrom,times=c(seq(0.1,10.9,0.1),11:99,seq(100,500,10)),founder=2,B=Blin)
+
+# rescale to frequencies 
+x[,2:ncol(x)]<-x[,2:ncol(x)]/rowSums(x[,2:ncol(x)])
+
+## compile data for plotting
+y <- reshape2::melt(x,id.vars="time")
+
+lin_plot_data <- list(Bfunc_data = df_demo, c_crit_data = df_lin,ode_data=y ,ode_pars=ode_pars)
+saveRDS(lin_plot_data,"data/lin_plot_data.Rds")
+
+```
+Generate data for sinusoidal function
+```{r}
+## function to determine steady state mis-segregation rate
+pop_ss_B <- function(beta,mu,maxchrom,minchrom,B){
+  A <- get_A(maxchrom=maxchrom,minchrom=minchrom,beta=beta,mu=mu,B=B)
+  ss <- eigen(t(A))
+  ss <- abs(ss$vectors[,apply(ss$vectors,2,function(i) prod(i>0)==1|prod(i<0)==1)])
+  ss <- ss/sum(ss)
+  p_mis <- sapply(1:length(ss), function(i) B(beta,minchrom+i-1))
+  sum(ss*p_mis)
+}
+## mis-segregation rate function
+Blog <- function(beta=1,i){
+  b <- -0.09*i + beta*sin(45.59-12.25*log(i))
+  min(1,exp(b)/100)
+}
+
+##produces data for the plot showing the behaviour of the function beta()
+maxchrom <- 110
+minchrom <- 22
+df_demo <- do.call(rbind,lapply((4:9)/2, function(beta){
+  data.frame(theta=beta,ploidy=minchrom:maxchrom,B=sapply(minchrom:maxchrom, function(i) Blog(beta,i)))}))
+
+
+
+beta_vals <- 2.66*seq(0.7,1.7,0.025)
+
+
+## find the critical curves but this takes long so we do in parallel so 
+## set to FALSE to use pre-generated data
+if(FALSE){
+  cl <- makeCluster(getOption("cl.cores", 4))
+  clusterCall(cl, function() { 
+    source("Rscripts/functions.R")
+    })
+  df_log <- do.call(rbind,parLapplyLB(cl = cl, X=beta_vals, fun=fast_c_crit,
+                                      maxchrom=maxchrom,minchrom=minchrom,B=Blog,df=TRUE))
+  df_log$pop_B <- sapply(1:nrow(df_log), function(i){
+  pop_ss_B(df_log$beta[i],df_log$mu[i],maxchrom=maxchrom,minchrom=minchrom,B=Blog)
+})
+  df_log$minB <- sapply(df_log$beta, Bmin, B=Blog,minchrom=minchrom,maxchrom=maxchrom)
+  saveRDS(df_log,"data/log_ccrit.Rds")
+}else{print("using saved data...")}
+
+#load pre-saved (or just saved) data
+df_log <- readRDS("data/log_ccrit.Rds")
+
+##get pars for ode model
+i <- 10
+pars <- df_log[i,]
+beta <- pars$beta
+mu <- pars$mu
+ode_pars <- data.frame(beta=beta,mu=mu)
+
+# run ODE
+#need the times to go up logarithmically otherwise the plots will look terrible,
+# or the ODE model will never finish.
+x <- run_ode(beta = beta,mu = mu,maxchrom=maxchrom,minchrom=minchrom,
+             times=c(seq(100,1000,10),seq(1100,10000,100),
+                     seq(11000,100000,1000),seq(110000,1000000,10000),
+                     seq(1100000,10000000,100000)),founder=44,B=Blog)
+
+x[,2:ncol(x)]<-x[,2:ncol(x)]/rowSums(x[,2:ncol(x)]) ## rescale to frequencies
+gix <- x ## take the output to make a gif
+
+
+##organise data for plotting
+x <- x[,colnames(x)%in%c("time","(22)","(44)","(66)","(88)","(110)")]
+
+y <- reshape2::melt(x,id.vars="time")
+sinus_plot_data <- list(Bfunc_data = df_demo, c_crit_data = df_log,ode_data=y,ode_pars=ode_pars )
+saveRDS(sinus_plot_data,"data/sinus_plot_data.Rds")
+
+
+```
+Plot the data
+
+```{r}
+
+hetero_plots <- function(plot_data,theta_index){
+  pa <- ggplot(plot_data$Bfunc_data,aes(x=ploidy,y=B,color=theta,group=theta))+
+    geom_line()+
+    scale_x_continuous("copy number")+
+    scale_y_log10("Mis-segr. rate (B)")+
+    theme_classic(base_size=16)+
+    scale_color_viridis_c(bquote(theta[.(theta_index)]))
+  
+  pb <- ggplot(plot_data$c_crit_data,aes(x=mu,y=beta))+
+    geom_line()+
+    geom_point(data=plot_data$ode_pars,size=2)+
+    scale_x_continuous(expression(mu/lambda),
+                       guide=guide_axis(check.overlap = TRUE))+
+    scale_y_continuous(bquote(theta[.(theta_index)]))+
+    theme_classic(base_size=16)
+  
+  
+  pd <- ggplot(plot_data$c_crit_data,aes(x=mu,y=pop_B))+
+    geom_line(aes(linetype="pop.\navg"))+
+    geom_line(aes(y=minB,linetype="pop.\nminimum"))+
+    scale_x_continuous(expression(mu/lambda),
+                       guide=guide_axis(check.overlap = TRUE))+
+    scale_y_log10(expression(beta))+
+    theme_classic(base_size=16)+
+    scale_linetype_discrete("")+
+    theme(legend.position="top")
+
+  
+  
+  pc <- ggplot(plot_data$ode_data,aes(x=time,y=value,color=variable))+
+    geom_line()+
+    scale_color_discrete("copy\nnumber")+
+    theme_classic(base_size=16)
+  
+  if(theta_index==1){
+    pc <- pc+scale_x_log10("days")+
+      scale_y_continuous("relative frequency")
+  }
+  if(theta_index==2){
+    pc <- pc+scale_x_log10("days")+#,limits=c(1,max(plot_data$ode_data$time)))+
+    scale_y_log10("relative frequency",
+                  limits=c(1e-6,1),
+                  breaks=c(1,0.01,0.001,0.00001))
+  }
+  
+  
+  
+  list(pa,pb,pc,pd)
+  
+}
+
+x2 <- hetero_plots(readRDS("data/sinus_plot_data.Rds"),theta_index=2)
+x1 <- hetero_plots(readRDS("data/lin_plot_data.Rds"),theta_index=1)
+
+
+f6 <- egg::ggarrange(x1[[1]],x2[[1]],x1[[2]],x2[[2]],
+                     x1[[3]],x2[[3]],x1[[4]],x2[[4]],
+                     labels=c("A","B","C","D","E","F","G","H"),
+                     ncol=2)
+ggsave("figures/f6.png",plot=f6,width=9,height=12,unit="in")
+
+```
+make a gif of the ODE evolution for the 22<i<110 case
+```{r}
+
+z <- gix
+colnames(z) <- c("time",2:ncol(z)+21)
+z <- reshape2::melt(z,id.vars="time")
+
+library(gganimate)
+
+p <- ggplot(z,aes(x=as.numeric(variable)+21,y=value))+
+  geom_point()+
+  scale_y_log10("steady state ",limits=c(0.000001,1))+
+  transition_time(log(time+0.00001))
+
+anim_save("figures/ode_gid.gif",plot=p)
+
+```

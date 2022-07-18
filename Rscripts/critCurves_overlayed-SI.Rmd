@@ -1,0 +1,298 @@
+---
+title: "CritCurvesOverlayed"
+author: "Richard J Beck"
+date: "6/8/2022"
+output: html_document
+---
+This file generates figure showing the critical curves transformed to population average death and mis-segregation rates. Also the time to reach steady state
+```{r setup}
+knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+```
+
+Source required functions and load libraries:
+```{r,message=FALSE}
+library(deSolve)
+library(pbapply)
+library(R.utils)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(deSolve)
+library(egg)
+source("Rscripts/functions.R")
+source("Rscripts/plot_facets.R")
+```
+
+Show the heterogeneous functions we used:
+
+```{r}
+
+Bvar <- function(beta,i){
+  b <- -0.09*i + beta*sin(45.59-12.25*log(i))
+  pmin(1,exp(b)/100)
+}
+
+Dvar <- function(M,i) 1-(1-M)*(cos(2*pi*i/22)+1)/2
+
+mu <- (1:10)/10
+beta <- 2.66*seq(0.7,1.7,0.1)
+
+cn <- 22:110
+
+df1 <- do.call(rbind,lapply(mu, function(mi){
+  data.frame(cn=cn,value=Dvar(mi,cn),id="mu",theta=mi)
+}))
+df2 <- do.call(rbind,lapply(beta, function(bi){
+  data.frame(cn=cn,value=Bvar(bi,cn),id="beta",theta=bi)
+}))
+
+
+p2 <- ggplot(df1,aes(x=cn,y=value,color=theta,group=theta))+
+  geom_line()+
+  scale_x_continuous("copy number")+
+  scale_y_continuous(expression(mu))+
+  scale_color_viridis_c(expression(Mu))+
+  theme_classic(base_size=12)
+p2
+
+p1 <- ggplot(df2,aes(x=cn,y=value,color=theta,group=theta))+
+  geom_line()+
+  scale_x_continuous("copy number")+
+  scale_y_log10(expression(beta))+
+  scale_color_viridis_c(expression(Beta))+
+  theme_classic(base_size=12)
+p1
+
+p_funcs <- cowplot::plot_grid(p1,p2,labels = c("A","B"),ncol=2)
+#ggsave("figures/hetero_curves.png",plot=p,width=7,height=3,units = "in")
+
+```
+
+generate critical curves using homogeneous and log functions:
+
+```{r}
+## function definitions (heterogeneous death and misseg)
+Bvar <- function(beta,i){
+  b <- -0.09*i + beta*sin(45.59-12.25*log(i))
+  min(1,exp(b)/100)
+}
+#Dvar <- function(M,i) 1/(-0.002*i + M*sin(0.21 + 0.24 *log(i)))
+Dvar <- function(M,i) 1-(1-M)*(cos(2*pi*i/22)+1)/2
+maxchrom <- 110
+minchrom <- 22
+
+## set correct ranges for the B parameter
+beta_hom <- seq(0.01,0.99,0.01) 
+beta_lin <- 2.66*seq(0.7,1.7,0.1)
+
+# critical curve for homogeneous mis-seg, heterogeneous death
+#xhv --> x[homogenous][variable]
+xhv <- do.call(rbind,pblapply(c(0.01,seq(0.1,0.9,0.2),0.99), function(beta) find_c_crit(beta,maxchrom=110,minchrom=22,D=Dvar)))
+
+## same notation idea as above
+xvv <- do.call(rbind,pblapply(beta_lin, function(beta) find_c_crit(beta,maxchrom=110,minchrom=22,D=Dvar,B=Bvar)))
+
+##...
+xhh <- pbsapply(beta_hom, function(beta) fast_c_crit(beta,maxchrom=110,minchrom=22))
+xvh <- pbsapply(beta_lin, function(beta) fast_c_crit(beta,maxchrom=110,minchrom=22,B=Bvar))
+
+##compute the population average rates
+dfhv <- data.frame(beta=c(0.01,seq(0.1,0.9,0.2),0.99),mu=xhv$mu,Btype="homo",Dtype="hetero")
+dfhv$popB <- dfhv$beta ##homogeneous function = constant rate
+## heterogeneous death: rate needs computed
+dfhv$popD <- sapply(1:nrow(dfhv), function(i) {
+  pop_ss_D(beta=dfhv$beta[i],mu=dfhv$mu[i],maxchrom=maxchrom,
+           minchrom=minchrom,D=Dvar)})
+## etc as above...                    
+dfvv <- data.frame(beta=beta_lin,mu=xvv$mu,Btype="hetero",Dtype="hetero") 
+dfvv$popB <- sapply(1:nrow(dfvv), function(i) {
+  pop_ss_B(beta=dfvv$beta[i],mu=dfvv$mu[i],maxchrom=maxchrom,
+           minchrom=minchrom,B=Bvar,D=Dvar)})
+
+dfvv$popD <- sapply(1:nrow(dfvv), function(i) {
+  pop_ss_D(beta=dfvv$beta[i],mu=dfvv$mu[i],maxchrom=maxchrom,
+           minchrom=minchrom,B=Bvar,D=Dvar)})
+                     
+dfhh <- data.frame(beta=beta_hom,mu=xhh,Btype="homo",Dtype="homo")
+dfhh$popB <- dfhh$beta
+dfhh$popD <- dfhh$mu
+dfvh <- data.frame(beta=beta_lin,mu=xvh,Btype="hetero",Dtype="homo")
+dfvh$popB <- pbsapply(1:nrow(dfvh), function(i) {
+  pop_ss_B(beta=dfvh$beta[i],mu=dfvh$mu[i],maxchrom=maxchrom,
+           minchrom=minchrom,B=Bvar)})
+dfvh$popD <- dfvh$mu
+
+##compile the data for plotting
+df <- rbind(dfvv,dfvh,dfhh,dfhv)
+saveRDS(df,"data/CritCurvesOverlayed.Rds")
+
+```
+Plot the data
+
+```{r}
+df <- readRDS("data/CritCurvesOverlayed.Rds")
+
+
+df$Btype <- sapply(df$Btype, function(x){
+  eq <- c("beta==Beta",
+          "beta==-0*.*09*i+Beta*sin(45.6-12.3*log~i)")[x==c("homo","hetero")]
+ #         "Beta==exp(beta-1.352857*i)/100")[x==c("homo","hetero")]
+})
+df$Dtype <- sapply(df$Dtype, function(x){
+  eq <- c("mu==Mu",
+          "mu==1-(1-Mu)*(cos(2*pi*i/22)+1)/2")[x==c("homo","hetero")]
+})
+
+types <- expand.grid(Btype=unique(df$Btype),
+                     Dtype=unique(df$Dtype))
+
+## a lot of hassle to get the plot labels - https://stackoverflow.com/a/52708749/8145482
+p1 <- ggplot(df,aes(x=Re(popD),y=Re(popB)))+
+  facet_wrap(c("Btype","Dtype"),scales="free",labeller=label_parsed)+
+  geom_line()+
+  scale_x_continuous(expression(pop.~avg.~death~rate~(mu[pop])),
+                     guide=guide_axis(check.overlap = TRUE))+
+  scale_y_continuous(expression(pop.~avg.~missegr.~rate~(beta[pop])))+
+  theme_classic(base_size=12)+
+  theme(strip.background = element_blank(),
+        strip.text = element_blank())
+
+
+p2 <- ggplot(df,aes(x=Re(popD),y=Re(popB)))+
+  facet_grid(c("Btype","Dtype"),scales="free",labeller=label_parsed)+
+  geom_line()+
+  scale_x_continuous(expression(pop.~avg.~death~rate~(mu[pop])),
+                     guide=guide_axis(check.overlap = TRUE))+
+  scale_y_continuous(expression(pop.~avg.~missegr.~rate~(beta[pop])))+
+  theme_classic(base_size=12)+
+    theme(strip.background = element_blank(),
+        strip.text.y = element_text(size=8)
+          )
+
+p_ccrit <- plot_facets(p1,p2)
+grid.newpage()
+grid.draw(p_ccrit)
+
+#ggsave("figures/CritCurvesOverlayed.png",plot=p_ccrit,width=7,height=5,unit="in")
+
+
+
+```
+Run the ODE model with parameter combinations along the critical curves.
+Quantify the distance between the ODE output at each time point, and the steady state
+```{r}
+## define functions
+Bvar <- function(beta,i){
+  b <- -0.09*i + beta*sin(45.59-12.25*log(i))
+  min(1,exp(b)/100)
+}
+Dvar <- function(M,i) 1-(1-M)*(cos(2*pi*i/22)+1)/2
+
+Bhom <- function(beta,i) return(beta)
+Dhom <- function(M,i) return(M)
+
+## function to get difference between ODE at time t (over a wide range of t) and steady state
+ttss <- function(beta,mu,B,D,minchrom,maxchrom){
+  ## first figure out what the steady state is
+  A <- get_A(maxchrom=maxchrom,minchrom=minchrom,beta=beta,mu=mu,B=B,D=D)
+  ss <- eigen(t(A))
+  ss <- Re(ss$vectors[,Re(ss$values)==max(Re(ss$values))])
+  ss <- ss/sum(ss)
+  
+  ## run the model over a large range of times
+  times <- seq(1,99.9,0.1)
+  times <- c(times,times*100,times*100^2,times*100^3,times*100^4)
+  
+  x <- run_ode(beta=beta,mu=mu,maxchrom=maxchrom,founder=44,minchrom=minchrom,
+                B=B,D=D,times = times)[,-1]
+  x <- x/rowSums(x)
+  ## intergrate the difference between ODE state and steady state over time
+  fin <- apply(x,1, function(i){
+    sum(abs(i-ss))
+  })
+  
+  data.frame(times=times,dist=fin)
+  
+  
+}
+## load  parameter sets on the critical curves
+df <- readRDS("data/CritCurvesOverlayed.Rds")
+df <- df[df$Btype=="hetero"|df$Dtype=="hetero"|df$beta%in%c(0.01,seq(0.05,0.95,0.05),0.99),]
+
+## run ODE for each parameter set and compute distances to steady state
+ttss <- do.call(rbind,pblapply(1:nrow(df), function(i){
+  B <- c(Bvar,Bhom)[df$Btype[i]==c("hetero","homo")][[1]]
+  D <- c(Dvar,Dhom)[df$Dtype[i]==c("hetero","homo")][[1]]
+  xi <- ttss(df$beta[i],df$mu[i],B,D,22,110)
+  xi$Btype <-df$Btype[i]
+  xi$Dtype <- df$Dtype[i]
+  xi$beta <- df$beta[i]
+  xi$mu <- df$mu[i]
+  xi$popB <- df$popB[i]
+  xi$popD <- df$popB[i]
+  xi
+}))
+
+saveRDS(ttss,"data/ttss.Rds")
+
+
+```
+
+Filter results from prior chunk and plot output
+```{r}
+df <- readRDS("data/ttss.Rds")
+
+df <- df[df$dist<0.001,] ## keep only ODE output that is "sufficiently" close to steady state (note that the distance generally goes from 2->1, so a dist of 0.001 is close indeed)
+
+## for each of the four conditions, and for each point on the critical curve identified by the parameter B (called beta in code), return the first timepoint where the modely was "sufficiently" close to steady state
+df <- aggregate(list(time=df$times),by=list(beta=df$popB,
+                                            Dtype=df$Dtype,
+                                            Btype=df$Btype),min)
+
+
+## make nice labels for plotting
+df$Btype <- sapply(df$Btype, function(x){
+  eq <- c("beta==Beta",
+          "beta==-0*.*09*i+Beta*sin(45.6-12.3*log~i)")[x==c("homo","hetero")]
+ #         "Beta==exp(beta-1.352857*i)/100")[x==c("homo","hetero")]
+})
+df$Dtype <- sapply(df$Dtype, function(x){
+  eq <- c("mu==Mu",
+          "mu==1-(1-M)*(cos(2*pi*i/22)+1)/2")[x==c("homo","hetero")]
+})
+
+
+
+p1 <- ggplot(df,aes(x=beta,y=time))+
+  facet_wrap(c("Btype","Dtype"),scales="free",labeller=label_parsed)+
+  geom_line()+
+  scale_x_log10(expression(pop.~avg.~missegr.~rate~(beta[pop])))+
+  scale_y_log10("time to steady state (days)")+
+  theme_classic(base_size=12)+
+  theme(strip.background = element_blank(),
+        strip.text = element_blank())
+
+
+p2 <- ggplot(df,aes(x=beta,y=time))+
+  facet_grid(c("Btype","Dtype"),scales="free",labeller=label_parsed)+
+  geom_line()+
+  scale_x_log10(expression(pop.~avg.~missegr.~rate~(beta[pop])))+
+  scale_y_log10("time to steady state (days)")+
+  theme_classic(base_size=12)+
+    theme(strip.background = element_blank(),
+        strip.text.y = element_text(size=8)
+          )
+
+p_ttss <- plot_facets(p1,p2)
+grid.newpage()
+grid.draw(p_ttss)
+
+#ggsave("figures/ttss.png",plot=p_ttss,width=7,height=5,unit="in")
+```
+Compile all the subpanels and plot
+```{r}
+
+cco <- cowplot::plot_grid(p_funcs,p_ccrit,p_ttss,labels = c("","C","D"),rel_heights = c(3,6,6),ncol=1)
+ggsave("figures/CritCurvesOverlayed.png",plot=cco,width=7,height=10,unit="in",bg = "white")
+```
+

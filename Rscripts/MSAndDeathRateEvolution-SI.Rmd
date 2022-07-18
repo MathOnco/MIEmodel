@@ -1,0 +1,196 @@
+---
+title: "MSRate"
+author: "Richard J Beck"
+date: "6/8/2022"
+output: html_document
+---
+File produces the MS and Death rate figure (closer investigation of model dynamics when mis-segr rate is homogeneous or heterogeneous)
+```{r setup}
+knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+```
+
+Source required functions and load libraries:
+```{r,message=FALSE}
+library(deSolve)
+library(pbapply)
+library(R.utils)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(deSolve)
+library(egg)
+source("Rscripts/functions.R")
+```
+
+generate critical curves using homogeneous and log functions:
+
+```{r}
+
+##heterogeneous function
+Blin <- function(beta,i){
+  min(1,exp(beta-1.352857*i)/100)
+}
+
+maxchrom <- 8
+## different ranges of B for each function
+beta_hom <- seq(0.01,0.99,0.01)
+beta_lin <- -2.657704*seq(1,-2.25,-0.1625)
+
+##generate critical curves
+hom <- pbsapply(beta_hom,very_fast_c_crit,maxchrom=maxchrom,n=1) ##homogenous function is default
+lin <- pbsapply(beta_lin,very_fast_c_crit,maxchrom=maxchrom,n=1,B=Blin)
+df1 <- data.frame(beta=beta_hom,mu=hom,id="homogeneous")
+df2 <- data.frame(beta=beta_lin,mu=lin,id="linear")
+
+## get pop avg missegr rates
+df1$popB <- sapply(1:nrow(df1), function(i) pop_ss_B(beta=df1$beta[i],mu=df1$mu[i],
+                                                     maxchrom=maxchrom,
+                                                     B=function(beta,i) return(beta)))
+df2$popB <- sapply(1:nrow(df2), function(i) pop_ss_B(beta=df2$beta[i],mu=df2$mu[i],
+                                                     maxchrom=maxchrom,
+                                                     B=Blin))
+
+## choosing some points on the critical curve to investigate
+hom_selected <- df1[sapply(c(0.1,0.5,0.9), function(i) which.min(abs(df1$beta-i))),]
+hom_selected$label <- 1:3
+lin_selected <- df2[sapply(c(-2.5,5.5,6), function(i) which.min(abs(df2$beta-i))),]
+lin_selected$label <- 1:3
+
+
+selected_points <- list(hom=hom_selected,lin=lin_selected)
+df_ccrit <- rbind(df1,df2)
+df_labs <- do.call(rbind,selected_points)
+
+```
+
+run models with selected parameter sets from previous chunk
+
+```{r}
+#run models
+xhom <- lapply(1:nrow(selected_points$hom), function(i){
+  run_ode(beta=selected_points$hom$beta[i],
+          mu=selected_points$hom$mu[i],
+          maxchrom=8, founder=2,times = seq(0.1,100,0.1))
+})
+
+xlin <- lapply(1:nrow(selected_points$lin), function(i){
+  run_ode(beta=selected_points$lin$beta[i],
+          mu=selected_points$lin$mu[i],
+          maxchrom=8, founder=2,B=Blin,times = c(seq(1,999,1)
+                                                 ,seq(1000,10000,10),
+                                                 seq(11000,100000,100),
+                                                 seq(110000,1000000,1000),
+                                                 seq(1100000,10000000,10000),
+                                                 seq(11000000,100000000,100000)))
+})
+
+## prepare models for plotting
+df_hom <- do.call(rbind,lapply(1:length(xhom), function(i){
+  xi <- xhom[[i]]
+  xi[,2:9] <- xi[,2:9]/rowSums(xi[,2:9])
+  colnames(xi) <- c("time",1:8)
+  xi <- reshape2::melt(xi,id.vars="time")
+  xi$label <- i
+  xi$id <- "homogeneous"
+  xi
+}))
+
+df_lin <- do.call(rbind,lapply(1:length(xlin), function(i){
+  xi <- xlin[[i]]
+  xi[,2:9] <- xi[,2:9]/rowSums(xi[,2:9])
+  colnames(xi) <- c("time",1:8)
+  
+  xi <- reshape2::melt(xi,id.vars="time")
+  xi$label <- i
+  xi$id <- "linear"
+  xi
+}))
+
+df_dynamics <- rbind(df_hom,df_lin)
+
+## extract the "time varying" rates of death and mis-segr.
+# (in quotes since for homogoeneous functions these rates are constant, and the death rate is always constant in this figure)
+
+## homogeneous one is very straightforward as neither the mis-segregation rate 
+## nor death rate depend on the state. 
+rates_hom <- do.call(rbind,lapply(1:length(xhom), function(i){
+  xi <- xhom[[i]]
+  data.frame(time=xi$time,Bpop=selected_points$hom$beta[i],
+             mu=selected_points$hom$mu[i],label=i,id="homogeneous")
+}))
+
+## heterogeneous function we need to calculate Bpop for the populations at each step
+rates_lin <- do.call(rbind,lapply(1:length(xlin), function(i){
+  xi <- xlin[[i]]
+  pop <- xi[,-1]
+  pop <- pop/rowSums(pop)
+  beta_i <- sapply(1:ncol(pop), function(j) Blin(selected_points$lin$beta[i], j))
+  Bpop = apply(pop,1,function(j) sum(j*beta_i))
+  data.frame(time=xi$time,Bpop=Bpop,
+             mu=selected_points$lin$mu[i],label=i,id="linear")
+}))
+
+##compile data ready for plotting
+df_rates <- rbind(rates_lin,rates_hom)
+df_rates <- reshape2::melt(df_rates,id.vars=c("time","label","id"))
+
+plot_dfs <- list(df_rates=df_rates,df_ccrit=df_ccrit,df_dynamics=df_dynamics,df_labs=df_labs)
+saveRDS(plot_dfs,"data/MSAndDeathRate.RDS")
+```
+
+Plot the data
+```{r}
+make_col <- function(xid,labels){
+  
+  df <- readRDS("data/MSAndDeathRate.RDS")
+  df_ccrit <- subset(df$df_ccrit,id==xid)
+  df_rates=subset(df$df_rates,id==xid)
+  df_labs <- subset(df$df_labs,id==xid)
+  df_dynamics <- subset(df$df_dynamics,id==xid)
+  relablr <- function(i) c("a","b","c")[i]
+  
+  p1 <- ggplot(df_ccrit,aes(x=mu,y=popB))+
+    #annotate(geom="text",x=0.001,y=0.9,label=relablr(B(NaN,NaN,TRUE)),parse=TRUE,size=3,hjust=0)+
+    #annotate(geom="text",x=0.001,y=0.7,label=relablr(D(NaN,NaN,TRUE)),parse=TRUE,size=3,hjust=0)+
+    geom_line()+
+    geom_point(data=df_labs)+
+    theme_bw(base_size=14)+
+    scale_x_continuous(expression(mu/lambda),guide=guide_axis(check.overlap = TRUE))+
+    scale_y_continuous(expression(beta[pop]))+
+    geom_text(data=df_labs,aes(label=relablr(label)), 
+              nudge_y = max(df_ccrit$popB/20),
+              nudge_x=max(1-df_ccrit$mu)/20)
+
+  
+  p2 <- ggplot(df_rates,aes(x=time,y=value,color=variable,linetype=relablr(label)))+
+    geom_line()+
+    theme_bw(base_size=14)+
+    scale_y_log10("Rate")+
+    scale_x_log10("days",guide=guide_axis(check.overlap = TRUE))+
+    scale_color_discrete("",labels=c(expression(beta[pop]),expression(mu/lambda)))+
+    theme(legend.spacing.y = unit(-0.2, "cm"))+
+    scale_linetype_discrete("")
+
+  
+  p3 <- ggplot(df_dynamics,aes(x=time,y=value,color=as.character(variable)))+
+    facet_grid(rows=vars(relablr(label)))+
+    geom_line()+
+    theme_bw(base_size=14)+
+    theme(strip.background = element_blank())+
+    scale_y_continuous("Relative frequency")+
+    scale_x_log10("days",guide=guide_axis(check.overlap = TRUE))+
+    scale_color_discrete("copy\nnumber")
+
+  
+  cowplot::plot_grid(p1,p2,p3,labels = labels,ncol=1,rel_heights = c(1,1,2))
+}
+
+col_1 <- make_col("homogeneous",c("A","C","E"))
+col_2 <- make_col("linear",c("B","D","F"))
+
+fx <- cowplot::plot_grid(col_1,col_2,labels = NULL,ncol=2)
+
+ggsave("figures/MSandDeathRate.png",plot=fx,width=7,height=8,unit="in")
+
+
+```

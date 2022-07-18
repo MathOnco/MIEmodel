@@ -1,0 +1,183 @@
+---
+title: "Critical Curves"
+author: "Richard J Beck"
+date: "6/8/2022"
+output: html_document
+---
+
+This file produces figures for critical curves where the mis-segregation rate is homogeneous. Some validation of the critical curves is also performed.
+
+Set working directory
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+```
+
+Source required functions and load libraries:
+```{r,message=FALSE}
+library(deSolve)
+library(pbapply)
+library(R.utils)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(deSolve)
+library(egg)
+source("Rscripts/functions.R")
+```
+
+Generate critical curves:
+```{r}
+
+beta_vals <- seq(0.05,0.95,0.05)
+
+df5 <- do.call(rbind,pblapply(beta_vals,fast_c_crit,maxchrom=5,df=TRUE))
+df10 <- do.call(rbind,pblapply(beta_vals,fast_c_crit,maxchrom=10,df=TRUE))
+df510 <- do.call(rbind,pblapply(beta_vals,fast_c_crit,maxchrom=c(5,10),df=TRUE))
+df_agg <- do.call(rbind,pblapply(beta_vals,fast_c_crit,maxchrom=110,minchrom=22,df=TRUE))
+df <- rbind(df5,df10,df510,df_agg)
+
+saveRDS(df,"data/critical_curves.Rds")
+
+```
+
+Perform numerical validation of critical curves
+```{r} 
+
+test_growth <- function(beta,mu,maxchrom){
+  minchrom <- 1
+  founder <- 2
+  mc<- as.numeric(unlist(strsplit(maxchrom,",")))
+  if(110%in%mc){
+    minchrom <- 22
+    founder <- 44
+  }
+  growth <- check_growth(beta,mu,mc,founder,minchrom)
+  data.frame(beta=beta,mu=mu,growth=growth,maxchrom=maxchrom)
+}
+
+pars <- expand.grid(mu=seq(0.05,0.95,0.1),beta=seq(0.05,0.95,.1))
+
+
+x5 <- do.call(rbind,pblapply(1:nrow(pars), function(i){
+  test_growth(pars$beta[i],pars$mu[i],"5")
+}))
+x10 <- do.call(rbind,pblapply(1:nrow(pars), function(i){
+  test_growth(pars$beta[i],pars$mu[i],"10")
+}))
+x510 <- do.call(rbind,pblapply(1:nrow(pars), function(i){
+  test_growth(pars$beta[i],pars$mu[i],"5,10")
+}))
+
+xagg <- do.call(rbind,pblapply(1:nrow(pars), function(i){
+  test_growth(pars$beta[i],pars$mu[i],"110")
+}))
+
+x <- rbind(x5,x10,x10,x510,xagg)
+saveRDS(x,"data/critical_curves_numerical.Rds")
+```
+Plot critical curves overlayed with numerical validation
+```{r}
+df <- readRDS("data/critical_curves.Rds")
+x <- readRDS("data/critical_curves_numerical.Rds")
+relablr <- function(mc) {
+  c('5'=" 1 <= i[x] ~ phantom() <= 5",'10'="1 <= i[x] ~ phantom() <= 10",
+    '5,10'="1 <= i[x1] ~ phantom() <= 5~and~1 <= i[x2] ~ phantom() <= 10",
+    '110'="22 <= ploidy ~ phantom() <= 110")[mc]
+}
+x$id <- sapply(x$maxchrom,relablr)
+df$id <- sapply(df$maxchrom,relablr)
+p <- ggplot(df,aes(x=mu,y=beta))+
+  facet_wrap(c("id"),labeller=label_parsed)+
+  geom_point(data=x,aes(shape=growth))+
+  geom_path()+
+  theme_classic(base_size=12)+
+  scale_x_continuous(expression(death~rate~(mu)))+
+  scale_y_continuous(expression(mis-segr.~rate~(beta)))+
+  scale_shape_discrete("population\nexpands")
+p
+ggsave("figures/ccrit_numerical.png",plot=p,width=7,height=5,unit="in")
+```
+Using the fast method for finding critical curves, generate critical curves for multiple chromosomes
+```{r}
+
+beta <- c(seq(0.01,0.99,0.01)/100,seq(0.01,0.99,0.01))
+maxchrom <- c(lapply(1:22, function(i) rep(3,i)),
+              lapply(1:22, function(i) rep(5,i)),
+              lapply(1:22, function(i) rep(8,i)))
+
+
+
+df <- do.call(rbind,pblapply(maxchrom, function(mc){
+  mu <- sapply(beta,very_fast_c_crit,maxchrom=mc[1],n=length(mc))
+  data.frame(beta=beta,mu=mu,maxchrom=mc[1],nchrom=length(mc))
+  
+}))
+
+saveRDS(df,"data/multi_ccrit.Rds")
+
+```
+
+Plot multiple chromosome results:
+```{r}
+
+df <- readRDS("data/multi_ccrit.Rds")
+
+lablr <- function(x) paste0("1 <= i[x] ~ phantom() <=",x)
+df$label <- sapply(df$maxchrom,lablr)
+
+fig_subset <- function(mc){
+  p <- ggplot(subset(df,maxchrom==mc),aes(x=Re(mu),y=beta,color=nchrom,group=nchrom))+
+  facet_grid(cols=vars(label),labeller=label_parsed)+
+  geom_path()+
+  scale_x_continuous(expression(mu/lambda),limits=c(0,1))+
+  scale_y_continuous(expression(beta))+
+  scale_color_viridis_c(expression(k))+
+  theme_classic(base_size=12)
+  if(mc<8) p <- p+theme(legend.position="none")
+p
+}
+
+f <- lapply(c(3,5,8),fig_subset)
+
+cowplot::plot_grid(f[[1]],f[[2]],f[[3]],ncol=3,rel_widths = c(2,2,2.8),labels=c("A","B","C"))
+
+ggsave("figures/multichrom_ccrit.png",width=7,height=3,unit="in")
+```
+
+Test that the three different methods for validating critical curves produce identical results:
+```{r}
+beta <- seq(0.05,0.95,0.1)
+maxchrom <- lapply(1:3, function(i) rep(3,i))
+
+df3 <- do.call(rbind,pblapply(beta,find_c_crit,maxchrom=3))
+
+
+
+df <- do.call(rbind,lapply(maxchrom, function(mc){
+  x <- do.call(rbind,pblapply(beta,find_c_crit,maxchrom=mc))
+  x$mu_fast <- pbsapply(beta,fast_c_crit,maxchrom=mc)
+  x$mu_vfast <- pbsapply(beta,very_fast_c_crit,maxchrom=mc[1],n=length(mc))
+  return(x)
+}))
+df <- df[df$v<0.00001,]
+df <- df[,-1]
+df <- reshape2::melt(df,id.vars=c("beta","maxchrom"))
+saveRDS(df,"data/ccrit_methods_test.Rds")
+
+```
+
+Plot validation results
+```{r}
+
+df <- readRDS("data/ccrit_methods_test.Rds")
+
+p <- ggplot(df,aes(x=value,y=beta,color=maxchrom))+
+  facet_grid(cols=vars(variable))+
+  geom_path(size=2)+
+  scale_x_continuous(expression(mu/lambda))+
+  scale_y_continuous(expression(beta))
+p
+```
+
+

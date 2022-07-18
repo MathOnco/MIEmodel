@@ -1,0 +1,57 @@
+---
+title: "MSandTurnoverInference"
+author: "Noemi Andor"
+date: "6/18/2022"
+output: html_document
+---
+This file generates figure comparing the critical curves to scRNA-seq derived turnover and missegregation rates
+```{r setup}
+knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+```
+
+Source required functions and load libraries:
+```{r,message=FALSE}
+library(pbapply)
+library(ggplot2)
+source("Rscripts/functions.R")
+```
+
+Read in scRNA-seq derived missegregation and turnover rates:
+
+```{r}
+X = read.table(file="data/Aneuploidy_Missegregation_Turnover_032122.txt",sep="\t",check.names = F)
+cancers=unique(X$origin[!is.na(X$origin) & !is.na(X$Turnover)])
+dff<-list()
+for(can in cancers){
+  x = X[X$origin==can,]
+  stats = boxplot(x[, c("Mis.segregation.rate.perChr","Turnover")])$stats
+  stats = as.data.frame(t(c(stats[,2],stats[,1])))
+  colnames(stats) = c("x.min" ,"x.lower","x.middle","x.upper","x.max",  "y.min", "y.lower","y.middle","y.upper","y.max")
+  stats$group = x$Tissue[1]
+  dff[[can]] = stats
+}
+dff = as.data.frame(do.call(rbind,dff))
+```
+
+Exclude the tumor with turnover rate > 1:
+
+```{r}
+df = dff[dff$x.middle<=1,]
+```
+
+Plot critical curves alongside scRNA-seq derived rates:
+
+```{r}
+beta=seq(0.00001,0.5,0.001)
+maxchrom=8
+## 2 chromosome types
+n=2
+critcurve <- pbsapply(beta, function(b) very_fast_c_crit(b,maxchrom=maxchrom,n=n))
+critcurve <- data.frame(beta=beta,mu=critcurve,group=paste(rep(maxchrom,n),collapse = ","))
+boxplot2D(df, critcurve, pdfout=paste0("figures/boxplot2D_",n,"chr.pdf"))
+## 22 chromosome types
+n=22
+critcurve <- pbsapply(beta, function(b) very_fast_c_crit(b,maxchrom=maxchrom,n=n))
+critcurve <- data.frame(beta=beta,mu=critcurve,group=paste(rep(maxchrom,n),collapse = ","))
+boxplot2D(df, critcurve, pdfout=paste0("figures/boxplot2D_",n,"chr.pdf"))
+```
