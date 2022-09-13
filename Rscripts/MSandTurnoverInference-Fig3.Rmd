@@ -1,21 +1,147 @@
 ---
 title: "MSandTurnoverInference"
-author: "Noemi Andor"
-date: "6/18/2022"
+author: "Noemi Andor, Xiaoqing Yu"
+date: "9/13/2022"
 output: html_document
 ---
-This file generates figure comparing the critical curves to scRNA-seq derived turnover and missegregation rates
+  This file generates figure comparing the critical curves to scRNA-seq derived turnover and missegregation rates
 ```{r setup}
-knitr::opts_knit$set(root.dir = "PATH/TO/ROOT/DIR")
+knitr::opts_knit$set(root.dir = "/Volumes/SSD_2TB/Noemi")
 ```
 
 Source required functions and load libraries:
 ```{r,message=FALSE}
 library(pbapply)
 library(ggplot2)
+library(plyr)
+library(scales)
 source("Rscripts/functions.R")
+
 ```
 
+
+Figure 3A
+Read in scRNA-seq derived missegregation and turnover rates:
+```{r}
+misseg = read.csv(file="data/Aneuploidy_Missegregation_Turnover_04142022_newSampleID.csv")
+colors=
+Figure3A<-ggplot(misseg[which(!is.na(misseg$turnover_Reported)),], 
+                         aes(x=misseg[which(!is.na(misseg$turnover_Reported)),]$turnover_Reported_2, 
+                             y=FOXO.mediated.transcription.of.cell.death.genes)) +
+  geom_boxplot( aes( fill=Tissue))+
+  scale_fill_manual(values=c("#f58231", "#911eb4" ,"#46f0f0"),name=c(""))+scale_y_continuous(breaks=c(-0.5,0,0.5))+
+ xlab("Reported Turnover")+ylab("FOXO mediated transcription of\ncell death genes")+coord_flip()+
+  theme(legend.position = "bottom", plot.margin=unit(c(5.5,10,5.5,5.5),"pt"),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        axis.text = element_text(size=11),axis.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        ,legend.key.size = unit(0.4, "cm"))
+```
+
+Figure 3B
+```{r}
+misseg$origin_2<-mapvalues(factor(misseg$origin),from=levels(factor(misseg$origin)),
+                           to=c("S1_MCC1_B2","S1_MCC1_B1","S2_MCC1_B1",
+                                "S3_NSCLC1_BM1","S3_NSCLC2_BM1","S3_NSCLC3_BM1",
+                                "S4_TNBC1_B1","S4_TNBC1_B2","S5_DCIS1_B1",
+                            "S6_TNBC1_B1","S6_TNBC2_B1","S6_TNBC3_B1","S6_TNBC4_B1","S6_TNBC5_B1",
+                                "S7_TNBC_Kif2b","S7_TNBC_MCAK","S7_TNBC_MKH"))
+
+
+misseg$turnover_Reported_2<-mapvalues(factor(misseg$turnover_Reported),
+                         from=levels(factor(misseg$turnover_Reported)),
+                         to=c("0.9","0.95","0.98"))
+misseg$Tissue<-factor(misseg$Tissue,levels=c("Lung","Skin","Breast"))
+
+a<-misseg  %>%
+  dplyr::group_by(origin_2) %>%
+  dplyr::summarize(median_Turnover = median(Turnover, na.rm = TRUE)) %>% as.data.frame() %>% arrange(median_Turnover) 
+a<-a[-c(15:17),]
+
+misseg.2<-misseg
+misseg.2$origin_2<-factor(misseg$origin_2,levels=a$origin_2)
+
+Figure3B<-ggplot(misseg.2[which(!is.na(misseg$turnover_Reported)),], 
+               aes(x=misseg.2[which(!is.na(misseg$turnover_Reported)),]$origin_2, 
+                   y=Turnover)) +
+  geom_boxplot( aes( fill=turnover_Reported_2))+
+  scale_fill_manual(values=c("#f58231", "#911eb4" ,"#46f0f0"))+
+  xlab("")+ylab("Predicted Turnover")+coord_flip()+
+  theme(legend.position = "none",plot.margin=unit(c(5.5,10,5.5,5.5),"pt"),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        axis.text = element_text(size=11),axis.title = element_text(size=12))
+```
+
+Figure 3C
+```{r}
+
+misseg$mis.segregation.rate_Reported_2<-mapvalues(factor(misseg$mis.segregation.rate_Reported),
+                                      from=levels(factor(misseg$mis.segregation.rate_Reported)),
+                                      to=c("6","16","60"))
+misseg$cellline<-rep(NA, nrow(misseg))
+misseg$cellline[which(as.character(misseg$origin_2)=="S7_TNBC_Kif2b")]<-"Supressed Missegeration (Kif2b)"
+misseg$cellline[which(misseg$origin_2=="S7_TNBC_MKH")]<-"Increased Missegeration (MKH)"
+misseg$cellline[which(misseg$origin_2=="S7_TNBC_MCAK")]<-"Supressed Missegeration (MCAK)"
+misseg$cellline<-factor(misseg$cellline,levels=c("Supressed Missegeration (MCAK)",
+                                                 "Supressed Missegeration (Kif2b)",
+                                                 "Increased Missegeration (MKH)"))
+
+misseg$cellline<-mapvalues(misseg$origin_2,from=levels(misseg$origin_2),
+                           to=c(rep(NA,14),"Supressed Missegeration (Kif2b)",
+                                "Supressed Missegeration (MCAK)","Increased Missegeration (MKH)"))
+misseg$cellline<-factor(misseg$cellline,
+levels=c("Supressed Missegeration (MCAK)","Supressed Missegeration (Kif2b)","Increased Missegeration (MKH)"))
+Figure3C<-ggplot(misseg[which(!is.na(misseg$mis.segregation.rate_Reported)),], 
+               aes(x=factor(misseg[which(!is.na(misseg$mis.segregation.rate_Reported)),]$mis.segregation.rate_Reported), y=Interferon.gamma.signaling)) +
+  geom_boxplot( aes( fill=cellline))+
+  scale_fill_manual(values=c("#fabebe" ,"#008080", "#e6beff"),name="")+
+  xlab("Reported Misseg. rate")+ylab("Interferon gamma signaling")+coord_flip()+
+  theme(legend.position = "bottom",plot.margin=unit(c(5.5,10,5.5,5.5),"pt"),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        axis.text = element_text(size=11),axis.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        legend.spacing.y = unit(0.1, 'cm'),legend.key.size = unit(0.4, "cm"))+
+  guides(fill=guide_legend(nrow=3, byrow=TRUE))
+```
+
+
+Figure 3D
+
+```{r}
+
+b<-misseg  %>%
+  dplyr::group_by(origin_2) %>%
+  dplyr::summarize(median_misseg = median(Mis.segregation.rate, na.rm = TRUE)) %>% as.data.frame() %>% arrange(median_misseg) 
+#misseg$origin<-factor(misseg$origin,levels=b$origin)
+misseg$origin_2<-factor(misseg$origin_2,levels=b$origin_2)
+misseg$color<-rep(1,nrow(misseg))
+misseg$color[misseg$turnover_Reported_2=="0.95"]<-2
+misseg$color[misseg$turnover_Reported_2=="0.98"]<-3
+misseg$color[misseg$mis.segregation.rate_Reported=="6"]<-4
+misseg$color[misseg$mis.segregation.rate_Reported=="16"]<-5
+misseg$color[misseg$mis.segregation.rate_Reported=="60"]<-6
+misseg$color<-factor(misseg$color)
+Figure3D<-ggplot(misseg, 
+                        aes(x=origin_2, 
+                            y=Mis.segregation.rate/100)) +
+  geom_boxplot( aes( fill=color))+
+  scale_fill_manual(values=c("#f58231","#911eb4","#46f0f0","#fabebe","#008080","#e6beff"))+
+  xlab("")+ylab("Predicted Misseg. rate\nper cell division")+coord_flip()+
+  scale_y_continuous(trans=log10_trans(), 
+                     breaks = trans_breaks('log10', function(x) 10^(x)))+
+  theme(legend.position = "none",plot.margin=unit(c(5.5,10,5.5,5.5),"pt"),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        axis.text.y= element_text(size=11),axis.title = element_text(size=12),
+        axis.text.x= element_text(size=9))
+
+
+```
+
+Figure E-F
 Read in scRNA-seq derived missegregation and turnover rates:
 
 ```{r}
